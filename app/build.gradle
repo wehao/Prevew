@@ -1,0 +1,72 @@
+apply plugin: 'com.android.application'
+
+android {
+    compileSdkVersion 26
+    defaultConfig {
+        applicationId "com.example.wehao.preview"
+        minSdkVersion 23
+        targetSdkVersion 26
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            moduleName "ImageProc"
+        }
+    }
+
+    signingConfigs {
+        def KEY_ALIAS="sign"
+        def KEY_PSWD="123456"
+        def STORE_FILE="../signature/sign.jks"
+        def STORE_FILE_PSWD="123456"
+        if(project.hasProperty('FA_SIGN_KEY')) {
+            KEY_ALIAS = FA_SIGN_KEY
+        }
+        if(project.hasProperty('FA_SIGN_KEY_PSWD')) {
+            KEY_PSWD = FA_SIGN_KEY_PSWD
+        }
+        if(project.hasProperty('FA_STORE_FILE')) {
+            STORE_FILE = FA_STORE_FILE
+        }
+        if(project.hasProperty('FA_STORE_PASSWORD')) {
+            STORE_FILE_PSWD = FA_STORE_PASSWORD
+        }
+
+        debug {
+            keyAlias KEY_ALIAS
+            keyPassword KEY_PSWD
+            storeFile file(STORE_FILE)
+            storePassword STORE_FILE_PSWD
+        }
+
+        release {
+            keyAlias KEY_ALIAS
+            keyPassword KEY_PSWD
+            storeFile file(STORE_FILE)
+            storePassword STORE_FILE_PSWD
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['libs']
+        }
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+    implementation 'com.android.support:appcompat-v7:26.1.0'
+    implementation 'com.android.support.constraint:constraint-layout:1.1.3'
+    testImplementation 'junit:junit:4.12'
+    androidTestImplementation 'com.android.support.test:runner:1.0.2'
+    androidTestImplementation 'com.android.support.test.espresso:espresso-core:3.0.2'
+}
