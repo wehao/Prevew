@@ -1,224 +1,209 @@
 #include "ImageProc.h"
 
-int errnoexit(const char *s)
-{
-	LOGE("%s error %d, %s", s, errno, strerror (errno));
-	return ERROR_LOCAL;
-}
-
-
-int xioctl(int fd, int request, void *arg)
-{
-	int r;
-
-	do r = ioctl (fd, request, arg);
-	while (-1 == r && EINTR == errno);
-
-	return r;
-}
-int checkCamerabase(void){
+int openDevice(char* dev) {
 	struct stat st;
-	int i;
-	int start_from_4 = 1;
-	
-	/* if /dev/video[0-3] exist, camerabase=4, otherwise, camrerabase = 0 */
-	for(i=0 ; i<4 ; i++){
-		sprintf(dev_name,"/dev/video%d",i);
-		if (-1 == stat (dev_name, &st)) {
-			start_from_4 &= 0;
-		}else{
-			start_from_4 &= 1;
-		}
+	int length = sizeof(dev)/sizeof(char);
+	if (length == 0) {
+		ALOGE("error param %s", dev);
 	}
-
-	if(start_from_4){
-		return 4;
-	}else{
-		return 0;
+	if (-1 == stat(dev, &st)) {
+		ALOGE("open device %s failed, dev is not exist", dev);
 	}
+	fd = open(dev, O_RDWR| O_NONBLOCK, 0);
+	if (fd == -1) {
+		ALOGE("open device %s failed", dev);
+	}
+	return 0;
 }
 
-int opendevice(int i)
-{
-	struct stat st;
-
-	sprintf(dev_name,"/dev/video%d",i);
-
-	if (-1 == stat (dev_name, &st)) {
-		LOGE("Cannot identify '%s': %d, %s", dev_name, errno, strerror (errno));
-		return ERROR_LOCAL;
+int getCapability(int fd) {
+	struct v4l2_capability capability;
+	int ret = 0;
+	ret = xioctl(fd, VIDIOC_QUERYCAP, &capability);
+	if (ret == -1) {
+		ALOGE("not support querycap");
+	} else {
+		ALOGE("V4L2_CAP_VIDEO_CAPTURE %d", capability.capabilities&V4L2_CAP_VIDEO_CAPTURE);
+		//ALOGE("V4L2_CAP_TUNER %d", capability.capabilities&V4L2_CAP_TUNER);
+		//ALOGE("V4L2_CAP_AUDIO %d", capability.capabilities&V4L2_CAP_AUDIO);
+		ALOGE("V4L2_CAP_STREAMING %d", capability.capabilities&V4L2_CAP_STREAMING);
 	}
-
-	if (!S_ISCHR (st.st_mode)) {
-		LOGE("%s is no device", dev_name);
-		return ERROR_LOCAL;
-	}
-
-	fd = open (dev_name, O_RDWR | O_NONBLOCK, 0);
-
-	if (-1 == fd) {
-		LOGE("Cannot open '%s': %d, %s", dev_name, errno, strerror (errno));
-		return ERROR_LOCAL;
-	}
-	return SUCCESS_LOCAL;
+	return ret;
 }
 
-int initdevice(void) 
-{
-	struct v4l2_capability cap;
+int setCropCap(int fd) {
+	int ret = 0;
 	struct v4l2_cropcap cropcap;
 	struct v4l2_crop crop;
-	struct v4l2_format fmt;
-	unsigned int min;
-
-	if (-1 == xioctl (fd, VIDIOC_QUERYCAP, &cap)) {
-		if (EINVAL == errno) {
-			LOGE("%s is no V4L2 device", dev_name);
-			return ERROR_LOCAL;
-		} else {
-			return errnoexit ("VIDIOC_QUERYCAP");
-		}
-	}
-
-	if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)) {
-		LOGE("%s is no video capture device", dev_name);
-		return ERROR_LOCAL;
-	}
-
-	if (!(cap.capabilities & V4L2_CAP_STREAMING)) {
-		LOGE("%s does not support streaming i/o", dev_name);
-		return ERROR_LOCAL;
-	}
-	
-	CLEAR (cropcap);
-
+	CLEAR(cropcap);
 	cropcap.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	ret = xioctl(fd, VIDIOC_CROPCAP, &cropcap);
+	if (ret == -1) {
+		ALOGE("VIDIOC_CROPCAP error %d, %s", error, strerror(error));
+	} else if (ret == 0) {
+		ALOGE("cropcap type %d", cropcap.type);
+		ALOGE("cropcap bounds rect left %d", cropcap.bounds.left);
+		ALOGE("cropcap bounds rect top %d", cropcap.bounds.top);
+		ALOGE("cropcap bounds rect width %d", cropcap.bounds.width);
+		ALOGE("cropcap bounds rect height %d", cropcap.bounds.height);
 
-	if (0 == xioctl (fd, VIDIOC_CROPCAP, &cropcap)) {
+		ALOGE("cropcap defrect rect left %d", cropcap.defrect.left);
+		ALOGE("cropcap defrect rect top %d", cropcap.defrect.top);
+		ALOGE("cropcap defrect rect width %d", cropcap.defrect.width);
+		ALOGE("cropcap defrect rect height %d", cropcap.defrect.height);
+
+		IMG_WIDTH = cropcap.defrect.width;
+		IMG_HEIGHT = cropcap.defrect.height;
+
 		crop.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		crop.c = cropcap.defrect;
-
-		if (-1 == xioctl (fd, VIDIOC_S_CROP, &crop)) {
-			switch (errno) {
-				case EINVAL:
-					break;
-				default:
-					break;
-			}
+		ret = xioctl(fd, VIDIOC_S_CROP, &crop);
+		if (ret == -1)
+		{
+			ALOGE("setCropCap  failed %d, %s", error, strerror(error));
+		}
+		else {
+			ALOGE("setCropCap  success");
 		}
 	} else {
+		ALOGE("cropcap else");
 	}
 
-	CLEAR (fmt);
+	return ret;
+}
 
-	fmt.type                = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+int setVideoFmt(int fd) {
+	struct v4l2_format fmt;
+	int min;
+	int ret;
 
-	fmt.fmt.pix.width       = IMG_WIDTH; 
-	fmt.fmt.pix.height      = IMG_HEIGHT;
-
+	fmt.type = V4L2_CAP_VIDEO_CAPTURE;
+	fmt.fmt.pix.width = IMG_WIDTH;
+	fmt.fmt.pix.height = IMG_HEIGHT;
 	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-	fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
+	fmt.fmt.pix.field = V4L2_FIELD_INTERLACED;
 
-	if (-1 == xioctl (fd, VIDIOC_S_FMT, &fmt))
-		return errnoexit ("VIDIOC_S_FMT");
+	ret = xioctl(fd, VIDIOC_S_FMT, &fmt);
+	if (ret == -1)
+	{
+		ALOGE("setVideoFmt failed");
+		return ret;
+	} else{
+		ALOGE("setVideoFmt success");
+	}
 
 	min = fmt.fmt.pix.width * 2;
 	if (fmt.fmt.pix.bytesperline < min)
+	{
 		fmt.fmt.pix.bytesperline = min;
+	}
 	min = fmt.fmt.pix.bytesperline * fmt.fmt.pix.height;
 	if (fmt.fmt.pix.sizeimage < min)
+	{
 		fmt.fmt.pix.sizeimage = min;
+	}
 
-	return initmmap ();
-
+	return ret;
 }
 
-int initmmap(void)
-{
+int queryBuffers(int fd) {
 	struct v4l2_requestbuffers req;
+	CLEAR(req);
+	req.count = 4;
+	req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	req.memory = V4L2_MEMORY_MMAP;
+	if (-1 == xioctl(fd, VIDIOC_REQBUFS, &req))
+	{
+		ALOGE("VIDIOC_REQBUFS failed %d, %s", error, strerror(error));
+		return -1;
+	}
+	if (req.count < 2)
+	{
+		ALOGE("VIDIOC_REQBUFS count is  %d", req.count);
+		return -1;
+	}
 
-	CLEAR (req);
+	buffers = NULL;
+	buffers = calloc(req.count, sizeof(*buffers));
+	for (n_buffers = 0; n_buffers < req.count; ++n_buffers)
+	{
+		struct v4l2_buffer buf;
+		CLEAR(buf);
 
-	req.count               = 4;
-	req.type                = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	req.memory              = V4L2_MEMORY_MMAP;
-
-	if (-1 == xioctl (fd, VIDIOC_REQBUFS, &req)) {
-		if (EINVAL == errno) {
-			LOGE("%s does not support memory mapping", dev_name);
-			return ERROR_LOCAL;
-		} else {
-			return errnoexit ("VIDIOC_REQBUFS");
+		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		buf.memory = V4L2_MEMORY_MMAP;
+		buf.index = n_buffers;
+		if (-1 == xioctl(fd, VIDIOC_QUERYBUF, &buf)) {
+			ALOGE("VIDIOC_REQBUF failed");
+			return -1;
+		}
+		buffers[n_buffers].length = buf.length;
+		buffers[n_buffers].start = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buf.m.offset);
+		if (MAP_FAILED == buffers[n_buffers].start) {
+			ALOGE("mmap failed ");
+			return -1;
 		}
 	}
-
-	if (req.count < 2) {
-		LOGE("Insufficient buffer memory on %s", dev_name);
-		return ERROR_LOCAL;
- 	}
-
-	buffers = calloc (req.count, sizeof (*buffers));
-
-	if (!buffers) {
-		LOGE("Out of memory");
-		return ERROR_LOCAL;
-	}
-
-	for (n_buffers = 0; n_buffers < req.count; ++n_buffers) {
-		struct v4l2_buffer buf;
-
-		 CLEAR (buf);
-
-		buf.type        = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-		buf.memory      = V4L2_MEMORY_MMAP;
-		buf.index       = n_buffers;
-
-		if (-1 == xioctl (fd, VIDIOC_QUERYBUF, &buf))
-			return errnoexit ("VIDIOC_QUERYBUF");
-
-		buffers[n_buffers].length = buf.length;
-		buffers[n_buffers].start =
-		mmap (NULL ,
-			buf.length,
-			PROT_READ | PROT_WRITE,
-			MAP_SHARED,
-			fd, buf.m.offset);
-
-		if (MAP_FAILED == buffers[n_buffers].start)
-			return errnoexit ("mmap");
-	}
-
-	return SUCCESS_LOCAL;
+	return 0;
 }
 
-int startcapturing(void)
-{
+int startStream() {
 	unsigned int i;
 	enum v4l2_buf_type type;
-
-	for (i = 0; i < n_buffers; ++i) {
+	for (i = 0; i < n_buffers; ++i)
+	{
 		struct v4l2_buffer buf;
-
-		CLEAR (buf);
-
-		buf.type        = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-		buf.memory      = V4L2_MEMORY_MMAP;
-		buf.index       = i;
-
-		if (-1 == xioctl (fd, VIDIOC_QBUF, &buf))
-			return errnoexit ("VIDIOC_QBUF");
+		CLEAR(buf);
+		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		buf.memory = V4L2_MEMORY_MMAP;
+		buf.index = i;
+		if (-1 == xioctl(fd, VIDIOC_QBUF, &buf)) {
+			ALOGE("V4L2_QBUF failed");
+			return -1;
+		}
 	}
+	type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	if (-1 == xioctl(fd, VIDIOC_STREAMON, &type)) {
+		ALOGE("VIDIOC_STREAMON failed %d, %s", error, strerror(error));
+		return -1;
+	}
+	return 0;
+} 
+
+int stopStream() {
+	enum v4l2_buf_type type;
 
 	type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-	if (-1 == xioctl (fd, VIDIOC_STREAMON, &type))
-		return errnoexit ("VIDIOC_STREAMON");
+	if (-1 == xioctl (fd, VIDIOC_STREAMOFF, &type))
+		return -1;
 
-	return SUCCESS_LOCAL;
+	return 0;
+} 
+
+int closeDevice() {
+	if (-1 == close (fd)){
+		fd = -1;
+		ALOGE("close fialed");
+	}
+
+	fd = -1;
+	return 0;
 }
 
-int readframeonce(void)
-{
+void uninitdevice() {
+	unsigned int i;
+
+	for (i = 0; i < n_buffers; ++i)
+		if (-1 == munmap (buffers[i].start, buffers[i].length))
+			return -1;
+
+	free (buffers);
+
+	return 0;
+}
+
+int readframeonce(void) {
 	for (;;) {
 		fd_set fds;
 		struct timeval tv;
@@ -236,99 +221,56 @@ int readframeonce(void)
 			if (EINTR == errno)
 				continue;
 
-			return errnoexit ("select");
+			ALOGE("select failed");
+			return -1;
 		}
 
 		if (0 == r) {
-			LOGE("select timeout");
-			return ERROR_LOCAL;
-
+			ALOGE("select timeout");
+			return -1;
 		}
 
-		if (readframe ()==1)
-			break;
-
+		if (readframe ()==1);
+		break;
 	}
 
-	return SUCCESS_LOCAL;
-
+	return 0;
 }
 
-
-void processimage (const void *p)
-{
-		yuyv422toABGRY((unsigned char *)p);
-}
-
-int readframe(void)
-{
-
+int readframe(void) {
 	struct v4l2_buffer buf;
-	unsigned int i;
-
-	CLEAR (buf);
-
+	CLEAR(buf);
 	buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	buf.memory = V4L2_MEMORY_MMAP;
-
-	if (-1 == xioctl (fd, VIDIOC_DQBUF, &buf)) {
-		switch (errno) {
-			case EAGAIN:
-				return 0;
-			case EIO:
-			default:
-				return errnoexit ("VIDIOC_DQBUF");
-		}
+	if (-1 == xioctl(fd, VIDIOC_DQBUF, &buf))
+	{
+		ALOGE("VIDIOC_DQBUF failed");
+		return -1;
 	}
-
-	assert (buf.index < n_buffers);
-
-	processimage (buffers[buf.index].start);
-
-	if (-1 == xioctl (fd, VIDIOC_QBUF, &buf))
-		return errnoexit ("VIDIOC_QBUF");
-
+	assert(buf.index < n_buffers);
+	processimage(buffers[buf.index].start);
+	if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
+	{
+		ALOGE("VIDIOC_QBUF after VIDIOC_DQBUF failed");
+		return -1;
+	}
+	ALOGE("readframe success");
 	return 1;
 }
 
-int stopcapturing(void)
-{
-	enum v4l2_buf_type type;
-
-	type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-
-	if (-1 == xioctl (fd, VIDIOC_STREAMOFF, &type))
-		return errnoexit ("VIDIOC_STREAMOFF");
-
-	return SUCCESS_LOCAL;
-
+void processimage(void* start) {
+	yuyv422toABGRY((unsigned char*)start);
 }
 
-int uninitdevice(void)
-{
-	unsigned int i;
-
-	for (i = 0; i < n_buffers; ++i)
-		if (-1 == munmap (buffers[i].start, buffers[i].length))
-			return errnoexit ("munmap");
-
-	free (buffers);
-
-	return SUCCESS_LOCAL;
+int errorexit() {
+	return 0;
 }
 
-int closedevice(void)
-{
-	if (-1 == close (fd)){
-		fd = -1;
-		return errnoexit ("close");
-	}
-
-	fd = -1;
-	return SUCCESS_LOCAL;
+int xioctl(int fd, int request, void* arg) {
+	int ret;
+	ret = ioctl(fd, request, arg);
+	return ret;
 }
-
-
 
 void yuyv422toABGRY(unsigned char *src)
 {
@@ -402,6 +344,55 @@ void yuyv422toABGRY(unsigned char *src)
 
 }
 
+int getBrightness() {
+	ctrl.id=BRIGHTNESS_ID;
+    	if(ioctl(fd,VIDIOC_G_CTRL,&ctrl)==-1)
+    	{
+        ALOGE("getBrightness failed");
+        return -1;
+    	} else{
+    		ALOGE("getBrightness success brightness is %d", ctrl.value);
+    	}
+    	return ctrl.value;
+}
+
+int setBrightness(int value) {
+	ctrl.id = BRIGHTNESS_ID;
+	ctrl.value = value;
+	if(ioctl(fd,VIDIOC_S_CTRL,&ctrl)==-1)
+    	{
+        ALOGE("setBrightness failed");
+        return -1;
+    	} else{
+    		ALOGE("setBrightness success brightness is %d", value);
+    	}
+	return 1;
+}
+
+int getContrast() {
+	ctrl.id=CONTRAST_ID;
+    	if(ioctl(fd,VIDIOC_G_CTRL,&ctrl)==-1)
+    	{
+        ALOGE("getContrast failed");
+        return -1;
+    	} else{
+    		ALOGE("getContrast success contrast is %d", ctrl.value);
+    	}
+    	return ctrl.value;
+}
+
+int setContrast(int contrast) {
+	ctrl.id = CONTRAST_ID;
+	ctrl.value = contrast;
+	if(ioctl(fd,VIDIOC_S_CTRL,&ctrl)==-1)
+    	{
+        ALOGE("setContrast failed");
+        return -1;
+    	} else{
+    		ALOGE("setContrast success contrast is %d", contrast);
+    	}
+	return 1;
+}
 
 void 
 Java_com_camera_simplewebcam_CameraPreview_pixeltobmp( JNIEnv* env,jobject thiz,jobject bitmap){
@@ -419,7 +410,7 @@ Java_com_camera_simplewebcam_CameraPreview_pixeltobmp( JNIEnv* env,jobject thiz,
 	int height=0;
 
 	if ((ret = AndroidBitmap_getInfo(env, bitmap, &info)) < 0) {
-		LOGE("AndroidBitmap_getInfo() failed ! error=%d", ret);
+		ALOGE("AndroidBitmap_getInfo() failed ! error=%d", ret);
 		return;
 	}
     
@@ -429,12 +420,12 @@ Java_com_camera_simplewebcam_CameraPreview_pixeltobmp( JNIEnv* env,jobject thiz,
 	if(!rgb || !ybuf) return;
 
 	if (info.format != ANDROID_BITMAP_FORMAT_RGBA_8888) {
-		LOGE("Bitmap format is not RGBA_8888 !");
+		ALOGE("Bitmap format is not RGBA_8888 !");
 		return;
 	}
 
 	if ((ret = AndroidBitmap_lockPixels(env, bitmap, &pixels)) < 0) {
-		LOGE("AndroidBitmap_lockPixels() failed ! error=%d", ret);
+		ALOGE("AndroidBitmap_lockPixels() failed ! error=%d", ret);
 	}
 
 	colors = (int*)pixels;
@@ -451,45 +442,61 @@ Java_com_camera_simplewebcam_CameraPreview_pixeltobmp( JNIEnv* env,jobject thiz,
 
 jint 
 Java_com_camera_simplewebcam_CameraPreview_prepareCamera( JNIEnv* env,jobject thiz, jint videoid){
-
-	int ret;
-
-	if(camerabase<0){
-		camerabase = checkCamerabase();
+	ALOGE("opendevice");
+	char devName[16] = "/dev/video21";
+	if (videoid != 0)
+	{
+		sprintf(devName,"/dev/video%d", videoid);
+	} else {
+		ALOGE("videoid is 0");
 	}
+	openDevice(devName);
+	getCapability(fd);
+	setCropCap(fd);
+	setVideoFmt(fd);
+	queryBuffers(fd);
+	startStream();
+	rgb = (int *)malloc(sizeof(int) * (IMG_WIDTH*IMG_HEIGHT));
+	ybuf = (int *)malloc(sizeof(int) * (IMG_WIDTH*IMG_HEIGHT));
+	return 0;
 
-	ret = opendevice(camerabase + videoid);
+	// int ret;
 
-	if(ret != ERROR_LOCAL){
-		ret = initdevice();
-	}
-	if(ret != ERROR_LOCAL){
-		ret = startcapturing();
+	// if(camerabase<0){
+	// 	camerabase = checkCamerabase();
+	// }
 
-		if(ret != SUCCESS_LOCAL){
-			stopcapturing();
-			uninitdevice ();
-			closedevice ();
-			LOGE("device resetted");	
-		}
+	// ret = opendevice(camerabase + videoid);
 
-	}
+	// if(ret != ERROR_LOCAL){
+	// 	ret = initdevice();
+	// }
+	// if(ret != ERROR_LOCAL){
+	// 	ret = startcapturing();
 
-	if(ret != ERROR_LOCAL){
-		rgb = (int *)malloc(sizeof(int) * (IMG_WIDTH*IMG_HEIGHT));
-		ybuf = (int *)malloc(sizeof(int) * (IMG_WIDTH*IMG_HEIGHT));
-	}
-	return ret;
+	// 	if(ret != SUCCESS_LOCAL){
+	// 		stopcapturing();
+	// 		uninitdevice ();
+	// 		closedevice ();
+	// 		LOGE("device resetted");	
+	// 	}
+
+	// }
+
+	// if(ret != ERROR_LOCAL){
+	// 	rgb = (int *)malloc(sizeof(int) * (IMG_WIDTH*IMG_HEIGHT));
+	// 	ybuf = (int *)malloc(sizeof(int) * (IMG_WIDTH*IMG_HEIGHT));
+	// }
+	// return ret;
 }	
 
 
 
 jint 
 Java_com_camera_simplewebcam_CameraPreview_prepareCameraWithBase( JNIEnv* env,jobject thiz, jint videoid, jint videobase){
-	
 		int ret;
 
-		camerabase = videobase;
+		// camerabase = videobase;
 	
 		return Java_com_camera_simplewebcam_CameraPreview_prepareCamera(env,thiz,videoid);
 	
@@ -505,16 +512,31 @@ Java_com_camera_simplewebcam_CameraPreview_processCamera( JNIEnv* env,
 void 
 Java_com_camera_simplewebcam_CameraPreview_stopCamera(JNIEnv* env,jobject thiz){
 
-	stopcapturing ();
+	stopStream ();
 
 	uninitdevice ();
 
-	closedevice ();
+	closeDevice ();
 
 	if(rgb) free(rgb);
 	if(ybuf) free(ybuf);
         
 	fd = -1;
+}
 
+jint Java_com_camera_simplewebcam_CameraPreview_getBrightness( JNIEnv* env,jobject thiz) {
+	return getBrightness();
+}
+
+jint Java_com_camera_simplewebcam_CameraPreview_setBrightness( JNIEnv* env,jobject thiz, jint brightness) {
+	return setBrightness(brightness);
+}
+
+jint Java_com_camera_simplewebcam_CameraPreview_getContrast( JNIEnv* env,jobject thiz) {
+	return getContrast();
+}
+
+jint Java_com_camera_simplewebcam_CameraPreview_setContrast( JNIEnv* env,jobject thiz, jint contrast) {
+	return setContrast(contrast);
 }
 
